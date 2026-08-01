@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>クソゲー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Dela+Gothic+One&display=swap" rel="stylesheet">
+<style>
+  html, body {
+    margin:0; padding:0; overflow:hidden; height:100%;
+    background:#4a5a63; touch-action: manipulation;
+    font-family: "Hiragino Sans", "Meiryo", "Yu Gothic", sans-serif;
+    -webkit-user-select:none; user-select:none;
+  }
+  #gameContainer { position:relative; width:100vw; height:100vh; overflow:hidden; }
+  canvas { display:block; }
+
+  #hud {
+    position:absolute; top:0; left:0; width:100%;
+    display:flex; justify-content:space-between; align-items:center;
+    padding: 18px 22px; box-sizing:border-box;
+    font-weight:700; font-size:22px; color:#1c1c1c;
+    pointer-events:none; z-index:5;
+  }
+  #timeLabel { text-shadow: 0 1px 3px rgba(255,255,255,0.5); }
+  #poopLabel { display:flex; align-items:center; gap:6px; text-shadow: 0 1px 3px rgba(255,255,255,0.5); }
+  #poopLabel .icon { font-size:24px; }
+
+  #overlay {
+    position:absolute; inset:0; display:none;
+    align-items:center; justify-content:center;
+    z-index:10; pointer-events:none;
+  }
+  #overlay.show { display:flex; }
+  #modal {
+    background: rgba(255,255,255,0.97);
+    border-radius: 26px;
+    padding: 52px 36px;
+    width: min(82vw, 380px);
+    text-align:center;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.28);
+    pointer-events:auto;
+  }
+  #modal .title {
+    color:#3fae4a; font-weight:800; font-size:40px;
+    line-height:1.35; margin:0 0 20px;
+    text-shadow: 0 0 12px rgba(63,174,74,0.25);
+  }
+  #modal .survival { color:#555; font-size:18px; margin: 0 0 28px; }
+  #retryBtn {
+    background:#f16060; color:#fff; border:none; border-radius:16px;
+    font-size:22px; font-weight:800; padding:18px 20px; width:100%;
+    cursor:pointer; box-shadow:0 4px 12px rgba(241,96,96,0.45);
+  }
+
+  #startOverlay {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; z-index:20;
+    background: rgba(60,74,82,0.72); color:#fff; text-align:center; padding:28px;
+  }
+  #startOverlay h1 {
+    font-family: 'Dela Gothic One', 'Hiragino Sans', sans-serif;
+    font-size: 46px; margin:0 0 16px; letter-spacing:3px;
+    color:#fff;
+    text-shadow:
+      3px 3px 0 #f16060,
+      -2px -2px 0 rgba(0,0,0,0.25),
+      0 8px 18px rgba(0,0,0,0.35);
+    transform: rotate(-2deg);
+  }
+  #startOverlay p { font-size:15px; margin:0 0 26px; line-height:1.7; opacity:0.9; }
+  #startBtn {
+    background:#f16060; color:#fff; border:none; border-radius:16px;
+    font-size:22px; font-weight:800; padding:16px 34px;
+    cursor:pointer; box-shadow:0 4px 12px rgba(241,96,96,0.45);
+  }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div id="timeLabel">Time : 0</div>
+    <div id="poopLabel"><span class="icon">💩</span><span id="poopCount">× 0</span></div>
+  </div>
+
+  <div id="overlay">
+    <div id="modal">
+      <div class="title">うんこ<br>つきました</div>
+      <div class="survival">生存時間: <span id="survivalTime">0</span> 秒</div>
+      <button id="retryBtn">タップでリトライ</button>
+    </div>
+  </div>
+
+  <div id="startOverlay">
+    <h1>クソゲー</h1>
+    <p>画面をタップすると棒人間の向きが変わる。<br>降ってくるうんこをひたすら避けろ。<br>うんこは消えず、1秒ごとに増え続ける…</p>
+    <button id="startBtn">タップでスタート</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const timeLabel = document.getElementById('timeLabel');
+const poopCountLabel = document.getElementById('poopCount');
+const overlay = document.getElementById('overlay');
+const survivalTimeLabel = document.getElementById('survivalTime');
+const retryBtn = document.getElementById('retryBtn');
+const startOverlay = document.getElementById('startOverlay');
+const startBtn = document.getElementById('startBtn');
+
+let W, H, groundH;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  groundH = Math.max(60, H * 0.09);
+}
+window.addEventListener('resize', resize);
+resize();
+
+let poops = [];
+let player = {};
+let running = false;
+let elapsed = 0;
+let lastSpawn = 0;
+let poopSpawned = 0;
+let lastFrame = 0;
+
+function resetGame() {
+  poops = [];
+  poopSpawned = 0;
+  elapsed = 0;
+  lastSpawn = 0;
+  player = { x: W/2, dir: 1, speed: W * 0.4224, size: 26 };
+  overlay.classList.remove('show');
+}
+
+const POOP_SIZE = 26;
+const POOP_SPEED = 10;      // 初速の大きさ(さらに落として全体をゆっくりに)
+const GRAVITY = 320;        // 重力加速度も下げて、全体的な落下・バウンドの速さを抑える
+
+function spawnPoop() {
+  // 入射角45度(左右ランダム) + 横方向を強めにブースト
+  const angle = (Math.random() < 0.5 ? -45 : 45) * Math.PI/180;
+  const H_BOOST = 9.0; // x軸方向の動きを強める倍率(12.0から調整)
+  poops.push({
+    x: Math.random() * W,
+    y: -40,
+    vx: POOP_SPEED * H_BOOST * Math.sin(angle),
+    vy: POOP_SPEED * Math.cos(angle),
+    size: POOP_SIZE
+  });
+  poopSpawned++;
+}
+
+function update(dt) {
+  if (!running) return;
+  elapsed += dt;
+
+  lastSpawn += dt;
+  if (lastSpawn >= 1) {
+    lastSpawn -= 1;
+    spawnPoop();
+  }
+
+  player.x += player.dir * player.speed * dt;
+  if (player.x < player.size/2) { player.x = player.size/2; player.dir = 1; }
+  if (player.x > W - player.size/2) { player.x = W - player.size/2; player.dir = -1; }
+
+  const groundTop = H - groundH;
+  for (const p of poops) {
+    p.vy += GRAVITY * dt;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+
+    // 左右の壁で反射
+    if (p.x < p.size/2) { p.x = p.size/2; p.vx = -p.vx; }
+    if (p.x > W - p.size/2) { p.x = W - p.size/2; p.vx = -p.vx; }
+
+    // 地面に当たったらボールのように弧を描いて跳ね返る(速さは保存)
+    if (p.y > groundTop - p.size*0.3) {
+      p.y = groundTop - p.size*0.3;
+      p.vy = -Math.abs(p.vy);
+    }
+    // 天井に当たったら跳ね返る
+    if (p.y < p.size/2) {
+      p.y = p.size/2;
+      p.vy = Math.abs(p.vy);
+    }
+  }
+
+  const groundY = H - groundH;
+  const headR = player.size*0.28;
+  const px = player.x;
+  const py = groundY - player.size*0.9 + headR + player.size*0.25;
+  for (const p of poops) {
+    const dx = p.x - px, dy = p.y - py;
+    if (Math.sqrt(dx*dx + dy*dy) < (p.size*0.4 + player.size*0.3)) {
+      endGame();
+      break;
+    }
+  }
+
+  timeLabel.textContent = 'Time : ' + Math.floor(elapsed);
+  poopCountLabel.textContent = '× ' + poopSpawned;
+}
+
+function drawGround() {
+  ctx.fillStyle = '#4caf50';
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.lineTo(0, H - groundH);
+  const step = 26;
+  const teeth = Math.ceil(W / step) + 1;
+  for (let i=0;i<=teeth;i++){
+    const x = i*step;
+    const y = (i%2===0) ? H-groundH : H-groundH+16;
+    ctx.lineTo(x,y);
+  }
+  ctx.lineTo(W, H);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawPlayer() {
+  const size = player.size;
+  const cx = player.x;
+  const groundY = H - groundH;
+  const headR = size*0.28;
+  const cy = groundY - size*0.9 + headR;
+
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.fillStyle = '#fff';
+  ctx.lineWidth = 3.4;
+  ctx.lineCap = 'round';
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, headR, 0, Math.PI*2);
+  ctx.fill();
+  ctx.stroke();
+
+  const bodyTop = cy + headR;
+  const bodyBottom = bodyTop + size*0.42;
+  ctx.beginPath();
+  ctx.moveTo(cx, bodyTop);
+  ctx.lineTo(cx, bodyBottom);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(cx - size*0.3, bodyTop + size*0.2);
+  ctx.lineTo(cx, bodyTop + size*0.08);
+  ctx.lineTo(cx + size*0.3, bodyTop + size*0.2);
+  ctx.stroke();
+
+  const legGap = size*0.16;
+  const hipX = cx;
+  const hipY = bodyBottom;
+
+  // 左脚(直立・固定)
+  ctx.beginPath();
+  ctx.moveTo(hipX, hipY);
+  ctx.lineTo(hipX - legGap, groundY);
+  ctx.stroke();
+
+  // 右脚(直立・固定)
+  ctx.beginPath();
+  ctx.moveTo(hipX, hipY);
+  ctx.lineTo(hipX + legGap, groundY);
+  ctx.stroke();
+}
+
+function drawPoops() {
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const p of poops) {
+    ctx.font = p.size + 'px sans-serif';
+    ctx.fillText('💩', p.x, p.y);
+  }
+}
+
+function draw() {
+  const grad = ctx.createLinearGradient(0,0,0,H);
+  grad.addColorStop(0, '#8ec9f5');
+  grad.addColorStop(1, '#c9e8fb');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,W,H);
+
+  drawPoops();
+  drawGround();
+  drawPlayer();
+}
+
+function loop(ts) {
+  if (!lastFrame) lastFrame = ts;
+  const dt = Math.min(0.05, (ts - lastFrame)/1000);
+  lastFrame = ts;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function endGame() {
+  running = false;
+  survivalTimeLabel.textContent = Math.floor(elapsed);
+  overlay.classList.add('show');
+}
+
+function startGame() {
+  resetGame();
+  running = true;
+  lastFrame = 0;
+  startOverlay.style.display = 'none';
+}
+
+canvas.addEventListener('pointerdown', () => {
+  if (!running) return;
+  player.dir *= -1;
+});
+retryBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  startGame();
+});
+startBtn.addEventListener('click', startGame);
+
+resetGame();
+draw();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
