@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>クソゲー ~天空糞爆撃~</title>
+<style>
+  :root{
+    --sky-top:#8ec9ff;
+    --sky-bottom:#e8f6ff;
+    --ground:#8fd18a;
+    --ground-dark:#6cb567;
+    --brown:#8b5a2b;
+    --brown-dark:#6b4423;
+    --panel:#fffaf0;
+    --ink:#3a2c1a;
+    --accent:#ff8a3d;
+    --accent-dark:#e06b1f;
+    --danger:#e8503a;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    font-family:"Yu Gothic","Hiragino Sans",sans-serif;
+    background:linear-gradient(180deg,var(--sky-top),var(--sky-bottom) 70%);
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    color:var(--ink);
+    padding:16px;
+    min-height:100vh;
+  }
+  h1{
+    margin:6px 0 2px;
+    font-size:clamp(22px,4vw,34px);
+    letter-spacing:.05em;
+    text-shadow:2px 2px 0 #fff, 4px 4px 0 rgba(0,0,0,.08);
+  }
+  .sub{
+    margin:0 0 10px;
+    font-size:13px;
+    opacity:.75;
+  }
+  #wrap{
+    position:relative;
+    border-radius:18px;
+    overflow:hidden;
+    box-shadow:0 10px 30px rgba(0,0,0,.25), 0 0 0 6px var(--panel), 0 0 0 10px var(--accent);
+  }
+  canvas{
+    display:block;
+    background:transparent;
+    touch-action:none;
+  }
+  #hud{
+    position:absolute;
+    top:10px; left:10px; right:10px;
+    display:flex;
+    justify-content:space-between;
+    font-weight:bold;
+    font-size:15px;
+    pointer-events:none;
+    text-shadow:1px 1px 0 #fff, -1px -1px 0 #fff;
+  }
+  #hearts{ letter-spacing:2px; font-size:18px; }
+  #overlay{
+    position:absolute; inset:0;
+    background:rgba(58,44,26,.72);
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    color:#fffaf0;
+    text-align:center;
+    gap:10px;
+    padding:20px;
+  }
+  #overlay h2{ margin:0; font-size:26px; }
+  #overlay p{ margin:0; font-size:14px; opacity:.9; }
+  button{
+    font-family:inherit;
+    font-weight:bold;
+    font-size:16px;
+    padding:10px 26px;
+    border:none;
+    border-radius:999px;
+    background:var(--accent);
+    color:#fff;
+    cursor:pointer;
+    box-shadow:0 4px 0 var(--accent-dark);
+    transition:transform .05s;
+  }
+  button:active{ transform:translateY(3px); box-shadow:0 1px 0 var(--accent-dark); }
+  .hidden{ display:none !important; }
+  #controls-hint{
+    margin-top:10px;
+    font-size:12px;
+    opacity:.7;
+    text-align:center;
+  }
+</style>
+</head>
+<body>
+  <h1>💩 クソゲー 💩</h1>
+  <p class="sub">〜空から降り注ぐうんこを避け続けるゲーム〜</p>
+
+  <div id="wrap">
+    <canvas id="game" width="480" height="640"></canvas>
+    <div id="hud">
+      <div>スコア: <span id="score">0</span></div>
+      <div id="hearts">❤️❤️❤️</div>
+    </div>
+    <div id="overlay">
+      <h2 id="overlay-title">クソゲーへようこそ</h2>
+      <p>← → キー / A・D / スワイプ・タップで移動<br>うんこを避けてどこまで生き延びられるか！</p>
+      <button id="start-btn">はじめる</button>
+    </div>
+  </div>
+  <p id="controls-hint">矢印キー・A/D・またはドラッグで左右移動</p>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+
+  const scoreEl = document.getElementById('score');
+  const heartsEl = document.getElementById('hearts');
+  const overlay = document.getElementById('overlay');
+  const overlayTitle = document.getElementById('overlay-title');
+  const startBtn = document.getElementById('start-btn');
+
+  const GROUND_Y = H - 60;
+
+  let player, poops, particles, score, lives, running, spawnTimer, spawnInterval, baseSpeed, elapsed, invuln;
+
+  function resetGame(){
+    player = { x: W/2, y: GROUND_Y - 34, w: 46, h: 46, speed: 6, vx: 0 };
+    poops = [];
+    particles = [];
+    score = 0;
+    lives = 3;
+    running = true;
+    spawnTimer = 0;
+    spawnInterval = 55;
+    baseSpeed = 2.6;
+    elapsed = 0;
+    invuln = 0;
+    scoreEl.textContent = score;
+    updateHearts();
+  }
+
+  function updateHearts(){
+    heartsEl.textContent = '❤️'.repeat(Math.max(lives,0)) + '🖤'.repeat(Math.max(3-lives,0));
+  }
+
+  // --- input ---
+  const keys = {};
+  window.addEventListener('keydown', e=>{
+    keys[e.key] = true;
+    if(['ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  });
+  window.addEventListener('keyup', e=> keys[e.key]=false);
+
+  let dragging = false;
+  canvas.addEventListener('pointerdown', e=>{ dragging = true; movePointer(e); });
+  canvas.addEventListener('pointermove', e=>{ if(dragging) movePointer(e); });
+  window.addEventListener('pointerup', ()=> dragging=false);
+  function movePointer(e){
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (W/rect.width);
+    player.x = Math.max(player.w/2, Math.min(W-player.w/2, x));
+  }
+
+  function spawnPoop(){
+    const size = 24 + Math.random()*22;
+    const x = size/2 + Math.random()*(W - size);
+    const speed = baseSpeed + Math.random()*2 + Math.min(elapsed/1400, 3.5);
+    const wobble = (Math.random()-0.5)*1.4;
+    poops.push({x, y:-size, size, speed, wobble, rot:Math.random()*Math.PI, rotSpeed:(Math.random()-0.5)*0.1});
+  }
+
+  function spawnParticles(x,y,color,n=10){
+    for(let i=0;i<n;i++){
+      particles.push({
+        x,y,
+        vx:(Math.random()-0.5)*6,
+        vy:(Math.random()-1.2)*6,
+        life:30+Math.random()*15,
+        color
+      });
+    }
+  }
+
+  function rectCircleHit(px,py,pw,ph, cx,cy,r){
+    const rx = Math.max(px-pw/2, Math.min(cx, px+pw/2));
+    const ry = Math.max(py-ph/2, Math.min(cy, py+ph/2));
+    const dx = cx-rx, dy = cy-ry;
+    return (dx*dx+dy*dy) < r*r;
+  }
+
+  function update(){
+    elapsed++;
+
+    // player movement
+    let dir = 0;
+    if(keys['ArrowLeft']||keys['a']||keys['A']) dir -= 1;
+    if(keys['ArrowRight']||keys['d']||keys['D']) dir += 1;
+    player.x += dir * player.speed;
+    player.x = Math.max(player.w/2, Math.min(W-player.w/2, player.x));
+
+    // spawn
+    spawnTimer++;
+    if(spawnTimer >= spawnInterval){
+      spawnTimer = 0;
+      spawnPoop();
+      spawnInterval = Math.max(16, 55 - elapsed/60);
+    }
+
+    if(invuln>0) invuln--;
+
+    // update poops
+    for(let i=poops.length-1;i>=0;i--){
+      const p = poops[i];
+      p.y += p.speed;
+      p.x += p.wobble;
+      p.rot += p.rotSpeed;
+      if(p.x < p.size/2 || p.x > W-p.size/2) p.wobble *= -1;
+
+      if(p.y - p.size/2 > H){
+        poops.splice(i,1);
+        score += 1;
+        scoreEl.textContent = score;
+        continue;
+      }
+
+      if(invuln<=0 && rectCircleHit(player.x, player.y, player.w*0.7, player.h*0.7, p.x, p.y, p.size/2*0.75)){
+        poops.splice(i,1);
+        lives--;
+        invuln = 70;
+        updateHearts();
+        spawnParticles(player.x, player.y, '#8b5a2b', 14);
+        if(lives<=0){
+          endGame();
+          return;
+        }
+      }
+    }
+
+    // particles
+    for(let i=particles.length-1;i>=0;i--){
+      const pt = particles[i];
+      pt.x += pt.vx; pt.y += pt.vy; pt.vy += 0.3; pt.life--;
+      if(pt.life<=0) particles.splice(i,1);
+    }
+  }
+
+  function drawBackground(){
+    ctx.clearRect(0,0,W,H);
+    // clouds
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    const t = elapsed*0.15;
+    for(let i=0;i<4;i++){
+      const cx = ((i*160 + t) % (W+120)) - 60;
+      const cy = 50 + i*70%180;
+      drawCloud(cx,cy);
+    }
+    // ground
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--ground');
+    ctx.fillRect(0, GROUND_Y, W, H-GROUND_Y);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--ground-dark');
+    for(let x=0;x<W;x+=24){
+      ctx.fillRect(x, GROUND_Y, 12, H-GROUND_Y);
+    }
+  }
+
+  function drawCloud(x,y){
+    ctx.beginPath();
+    ctx.arc(x,y,18,0,Math.PI*2);
+    ctx.arc(x+20,y-8,22,0,Math.PI*2);
+    ctx.arc(x+42,y,18,0,Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawPlayer(){
+    const {x,y,w,h} = player;
+    ctx.save();
+    ctx.translate(x,y);
+    if(invuln>0 && Math.floor(invuln/5)%2===0) ctx.globalAlpha = 0.4;
+
+    // body (bucket/hat character dodging)
+    ctx.fillStyle = '#4a3728';
+    ctx.beginPath();
+    ctx.ellipse(0, h*0.28, w*0.42, h*0.22, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = '#fcd9b8';
+    ctx.beginPath();
+    ctx.arc(0,-h*0.12, w*0.32, 0, Math.PI*2);
+    ctx.fill();
+
+    // umbrella
+    ctx.strokeStyle = '#5a4632';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0,-h*0.12);
+    ctx.lineTo(0,-h*0.55);
+    ctx.stroke();
+
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent');
+    ctx.beginPath();
+    ctx.moveTo(-w*0.55,-h*0.5);
+    ctx.quadraticCurveTo(0,-h*0.95, w*0.55,-h*0.5);
+    ctx.quadraticCurveTo(0,-h*0.65,-w*0.55,-h*0.5);
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    for(let i=-2;i<=2;i++){
+      ctx.beginPath();
+      ctx.moveTo(0,-h*0.55);
+      ctx.lineTo(i*w*0.22, -h*0.5);
+      ctx.stroke();
+    }
+
+    // face
+    ctx.fillStyle = '#3a2c1a';
+    ctx.beginPath();
+    ctx.arc(-6,-h*0.12,2.4,0,Math.PI*2);
+    ctx.arc(6,-h*0.12,2.4,0,Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0,-h*0.05, 5, 0, Math.PI, false);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawPoop(p){
+    ctx.save();
+    ctx.translate(p.x,p.y);
+    ctx.rotate(p.rot);
+    const s = p.size/32;
+    ctx.scale(s,s);
+    ctx.fillStyle = '#8b5a2b';
+    ctx.beginPath();
+    ctx.moveTo(0,16);
+    ctx.bezierCurveTo(-16,16,-14,2,-6,0);
+    ctx.bezierCurveTo(-12,-2,-10,-12,0,-10);
+    ctx.bezierCurveTo(8,-14,14,-6,8,-2);
+    ctx.bezierCurveTo(16,0,16,16,0,16);
+    ctx.fill();
+    ctx.strokeStyle = '#6b4423';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // eyes
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(-5,-2,3.4,0,Math.PI*2); ctx.arc(5,-2,3.4,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#2a1c10';
+    ctx.beginPath(); ctx.arc(-4.5,-1.5,1.6,0,Math.PI*2); ctx.arc(5.5,-1.5,1.6,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawParticles(){
+    for(const pt of particles){
+      ctx.globalAlpha = Math.max(pt.life/40,0);
+      ctx.fillStyle = pt.color;
+      ctx.beginPath();
+      ctx.arc(pt.x,pt.y,3,0,Math.PI*2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function draw(){
+    drawBackground();
+    for(const p of poops) drawPoop(p);
+    drawPlayer();
+    drawParticles();
+  }
+
+  let loopId;
+  function loop(){
+    if(!running) return;
+    update();
+    if(!running) { draw(); return; }
+    draw();
+    loopId = requestAnimationFrame(loop);
+  }
+
+  function endGame(){
+    running = false;
+    draw();
+    overlayTitle.textContent = `ゲームオーバー！ スコア: ${score}`;
+    startBtn.textContent = 'もう一度';
+    overlay.classList.remove('hidden');
+  }
+
+  startBtn.addEventListener('click', () => {
+    overlay.classList.add('hidden');
+    resetGame();
+    draw();
+    loop();
+  });
+
+  // initial idle draw
+  resetGame();
+  running = false;
+  draw();
+})();
+</script>
+</body>
+</html>
